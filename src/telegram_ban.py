@@ -7,9 +7,12 @@ from telethon import TelegramClient, functions, events
 
 fuckyou_russia_channels = [
     [704120365, "https://t.me/rusfleet"],
+    [122846719, "https://t.me/rusfleet"],
     [640719968, "https://t.me/annavegdash"],
+    [74354585, "https://t.me/milinfolive"],
     [699746908, "https://t.me/milinfolive"],
     [699746908, "https://t.me/omonmoscow"],
+    [457644020, "https://t.me/omonmoscow"],
     [699746908, "https://t.me/neoficialniybezsonov"],
     [699746908, "https://t.me/rybar"],
     [398034986, "https://t.me/dnepr_partizani"],
@@ -84,6 +87,7 @@ fuckyou_russia_channels = [
     [1987152515, "https://t.me/verbaaa"],
     [484769170, "https://t.me/bahamov_ua"],
     [401054155, "https://t.me/ugolok_sitha"],
+    [459051914, "https://t.me/ugolok_sitha"],
     [834525588, "https://t.me/chp_donetsk/9680"],
     [730121068, "https://t.me/newstt2022"],
     [882366211, "https://t.me/+k5g8o_wc4zpmntli"],
@@ -123,8 +127,10 @@ fuckyou_russia_channels = [
     [672624386, "@rybar"],
     [55847097, "@balkanossiper"],
     [672624386, "@russ_orientalist"],
+    [263569229, "@russ_orientalist"],
     [401054155, "https://t.me/bulbe_de_trones"],
     [55847097, "@brussinf"],
+    [376818144, "@brussinf"],
     [672624386, "@vladlentatarsky"],
     [341945038, "https://t.me/claymoreairz"],
     [341945038, "https://t.me/bomsclaim"],
@@ -296,7 +302,8 @@ fuckyou_russia_channels = [
     [378321191, "@siloviki_chat"],
     [615893951, "https://t.me/pushilindenis"],
     [876498695, "@ssleg"],
-    [876498695, "https://t.me/vsu_info_bot"]
+    [876498695, "https://t.me/vsu_info_bot"],
+    [1180212174, "https://t.me/rlz_the_kraken"]
 ]
 
 
