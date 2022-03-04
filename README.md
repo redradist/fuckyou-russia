@@ -3,4 +3,4 @@
 2. Go to https://core.telegram.org/api/obtaining_api_id
 3. Click to 'API development tools'
 4. Login into Telegram
-7. Run `python3 ./telegram_reporter.py --api_id 4215242 --api_hash a7896f9ays90yh98as9h9hasf` with api_id and api_hash from 'API development tools'   
+7. Run `python3 ./src/telegram_cli_reporter.py --api_id 4215242 --api_hash a7896f9ays90yh98as9h9hasf` with api_id and api_hash from 'API development tools'   
