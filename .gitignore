@@ -1,4 +1,6 @@
 .idea/
 *.session
+*.session-journal
 .env
 app_creds.json
+__pycache__/

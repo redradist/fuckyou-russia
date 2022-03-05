@@ -1,5 +1,7 @@
 import asyncio
 import sys
+from enum import Enum
+from typing import Callable, Optional, Union, List, Tuple, Awaitable
 
 from telethon.tl.types import InputReportReasonOther
 from telethon import TelegramClient, functions, events
@@ -329,7 +331,13 @@ fuckyou_russia_channels = [
 ]
 
 
-async def report_channels(client: TelegramClient):
+class MessageType(Enum):
+    Channel = 0
+    Error = 1
+    Done = 2
+
+
+async def report_channels(client: TelegramClient, callback: Callable[[Union[Optional[str], Tuple[str, Exception]]], Awaitable[None]] = None):
     for channel in fuckyou_russia_channels:
         ch_id, ch_name = channel
         try:
@@ -338,11 +346,17 @@ async def report_channels(client: TelegramClient):
                 id=[ch_id],
                 reason=InputReportReasonOther(),
                 message='Please, block this chat, it spreads violence and supports terrorists on Ukraine territory. '
-                        'Block it to save lives in my country !! '
+                        'Block it to save lives in my country !!'
             ))
             if result:
+                if callback:
+                    await callback(ch_name)
                 print(f"Successfully reported about {ch_name}")
         except Exception as ex:
+            if callback:
+                await callback((ch_name, ex))
             print(f"Failed during report about {ch_name}:\n{ex}", file=sys.stderr)
         await asyncio.sleep(1)
+    if callback:
+        await callback(None)
     print(f"All channels reported successfully !!")
