@@ -459,6 +459,8 @@ def create_report_channels_callback(msg) -> Callable[[Union[Optional[str], Tuple
 @dp.message_handler(commands='start',
                     state='*')
 async def process_start_command(msg: Message):
+    username = msg.from_user.mention
+    print(f"Received command 'start' from {username}")
     await UserState.Phone.set()
     await hello_help(msg)
     await enter_phone(msg)
@@ -477,19 +479,21 @@ async def process_text_command(msg: Message, state: FSMContext):
             password_fut = user_password_fut[username]
             password_fut.cancel()
 
+        print(f"Received command 'restart' from {username}")
         await UserState.Phone.set()
         await enter_phone(msg)
 
 
 @dp.message_handler(state=UserState.Phone, content_types=ContentType.CONTACT)
 async def process_phone(msg: Message, state: FSMContext):
+    username = msg.from_user.mention
     if not await is_start_command(msg):
         phone = msg.contact.phone_number
         phone = await phone_validate_and_update(msg, phone)
         if not phone:
             return
 
-        print(f"Received phone = {phone}")
+        print(f"Received phone = {phone} from {username}")
         async with state.proxy() as data:
             data['phone'] = phone
 
@@ -501,13 +505,14 @@ async def process_phone(msg: Message, state: FSMContext):
 
 @dp.message_handler(state=UserState.Phone, content_types=ContentType.TEXT)
 async def process_phone_text(msg: Message, state: FSMContext):
+    username = msg.from_user.mention
     if not await is_start_command(msg):
         phone = msg.text
         phone = await phone_validate_and_update(msg, phone)
         if not phone:
             return
 
-        print(f"Received phone = {phone}")
+        print(f"Received phone = {phone} from {username}")
         async with state.proxy() as data:
             data['phone'] = phone
 
@@ -519,13 +524,14 @@ async def process_phone_text(msg: Message, state: FSMContext):
 
 @dp.message_handler(state=UserState.Code)
 async def process_code(msg: Message, state: FSMContext):
+    username = msg.from_user.mention
     if not await is_start_command(msg):
         code_match = code_regex.match(msg.text.lower().replace(' ', ''))
         if not code_match:
             await confirmation_code_error(msg)
         else:
             code = code_match.group('code')
-            print(f"Received code = {code}")
+            print(f"Received code = {code} from {username}")
             username = msg.from_user.mention
             if username in user_code_fut:
                 code_fut = user_code_fut[username]
@@ -542,9 +548,10 @@ async def process_code(msg: Message, state: FSMContext):
 
 @dp.message_handler(state=UserState.Password)
 async def process_password(msg: Message, state: FSMContext):
+    username = msg.from_user.mention
     if not await is_start_command(msg):
         password = msg.text
-        print(f"Received password")
+        print(f"Received password *** from {username}")
         if len(password) == 0:
             await confirmation_password_error(msg)
         else:
@@ -561,7 +568,7 @@ async def process_password(msg: Message, state: FSMContext):
 
 
 async def report_channels_again(user):
-    print(f"report_channels_again")
+    print(f"report_channels_again for user = {user.name}")
     client = TelegramClient(StringSession(user.session), API_ID, API_HASH)
     try:
         await client.connect()
