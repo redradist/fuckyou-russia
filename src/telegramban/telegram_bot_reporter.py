@@ -602,6 +602,7 @@ async def tick_report_channels_again():
 
 async def main():
     scheduler.start()
+    await tick_report_channels_again()
     scheduler.add_job(tick_report_channels_again, 'interval', hours=4)
 
     # NOTE: For debug purposes
