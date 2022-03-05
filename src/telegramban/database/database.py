@@ -56,8 +56,7 @@ class UserSession(Base, ModelAdmin):
             f"id={self.id}, "
             f"user_id={self.user_id}, "
             f"name={self.name}, "
-            f"phone={self.phone}, "
-            f"session={self.session}, "
+            f"phone={self.phone}"
             f")>"
         )
 
