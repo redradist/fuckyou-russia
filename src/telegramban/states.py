@@ -1,7 +1,7 @@
 from aiogram.dispatcher.filters.state import StatesGroup, State
 
 
-class User(StatesGroup):
+class UserState(StatesGroup):
     Init = State()
     Phone = State()
     Code = State()

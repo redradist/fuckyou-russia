@@ -3,8 +3,9 @@ import os
 import re
 import sys
 import traceback
-from typing import Union, Optional, Tuple, Callable, Awaitable
+import random
 
+from typing import Union, Optional, Tuple, Callable, Awaitable, List
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters import Text
 from aiogram.types import ContentType, ParseMode, Message
@@ -12,14 +13,17 @@ from aiogram.utils import executor
 from telethon import TelegramClient
 from phonenumbers.phonenumberutil import country_code_for_region
 from telethon.errors import SessionPasswordNeededError, PhoneCodeExpiredError
-from telethon.sessions import SQLiteSession
-from src.database.database import async_db_session
+from telethon.sessions import SQLiteSession, StringSession
+from database.database import async_db_session, UserSession
 from loader import dp, bot
-from src.database.models import TelegramSession
+from scheduler import scheduler
+from states import UserState
+from telegram_ban import report_channels
+from telegramban.telegram_bot_types import User
 
 import telegram_keyboard as kb
-from states import User
-from telegram_ban import report_channels
+import database.models
+
 
 API_ID = int(os.environ['API_ID'])
 API_HASH = os.environ['API_HASH']
@@ -43,18 +47,30 @@ class BotException(Exception):
         return f"BotException({self.msg})"
 
 
-async def get_session(user_name):
-    sessions = await TelegramSession.filter_by_user_name(user_name)
-    if len(sessions) > 0:
-        return sessions[0].user_session
+async def create_or_update_session(user: User):
+    users = await UserSession.filter_by_phone(user.phone)
+    if len(users) > 0:
+        users = await UserSession.update(id=user.id,
+                                         user_id=user.id,
+                                         name=user.name,
+                                         phone=user.phone,
+                                         session=user.session)
+    else:
+        users = await UserSession.create(user_id=user.id,
+                                         name=user.name,
+                                         phone=user.phone,
+                                         session=user.session)
+
+async def get_all_users() -> List[User]:
+    return await UserSession.get_all()
+
+
+async def get_session(user: User) -> str:
+    users = await UserSession.filter_by_phone(user.phone)
+    if len(users) > 0:
+        return users[0].session
     else:
         return ''
-
-
-async def create_or_update_session(user_name, user_session):
-    await TelegramSession.create(user_name=user_name, user_session=user_session)
-    user = await TelegramSession.get(1)
-    return user.id
 
 
 async def is_start_command(msg):
@@ -223,6 +239,18 @@ async def fuck_russia_channels(msg):
         await bot.send_message(user_id, f"You are logged in, now you will fuck russian telegram channels !! Thank you for your cooperation !!")
 
 
+async def enter_phone_again(user: User):
+    if user.lang == 'ru':
+        await bot.send_message(user.id, f"Сессия окончена, если вы хотите продолжить помогать блокировать рашисткие "
+                                        f"телеграм каналы, полажуйста нажмите кнопку начать заново")
+    elif user.lang == 'ua':
+        await bot.send_message(user.id, f"Сесія закінчена, якщо ви хочете продовжити допомагати блокувати рашисткі "
+                                        f"телеграм канали, будь ласка, натисніть кнопку почати заново ")
+    else:
+        await bot.send_message(user.id, f"The session is over, if you want to continue helping to block rassian "
+                                        f"telegram channels, please click the button to start again ")
+
+
 
 async def phone_validate_and_update(msg, phone):
     locale = msg.from_user.locale
@@ -249,14 +277,18 @@ async def phone_validate_and_update(msg, phone):
             return phone
 
 
-async def connect_using_phone(msg, state, phone):
+async def connect_using_phone(msg, phone):
     username = msg.from_user.mention
-    client = TelegramClient(SQLiteSession(username), API_ID, API_HASH)
+    session = await get_session(User(id=msg.from_user.id,
+                                     name=username,
+                                     phone=phone,
+                                     lang=msg.from_user.locale.language))
+    client = TelegramClient(StringSession(session), API_ID, API_HASH)
     try:
         await client.connect()
         if client.is_connected():
             if not await client.is_user_authorized():
-                await User.Code.set()
+                await UserState.Code.set()
                 response = await client.send_code_request(phone)
                 await enter_code_confirmation(msg)
                 loop = asyncio.get_running_loop()
@@ -265,12 +297,17 @@ async def connect_using_phone(msg, state, phone):
                 code = await code_fut
                 await client.sign_in(phone=phone, code=code, phone_code_hash=response.phone_code_hash)
             if await client.is_user_authorized():
-                await User.Done.set()
+                await UserState.Done.set()
+                await create_or_update_session(User(id=msg.from_user.id,
+                                                    name=username,
+                                                    phone=phone,
+                                                    lang=msg.from_user.locale.language,
+                                                    session=client.session.save()))
                 await fuck_russia_channels(msg)
-                await report_channels(client, create_report_channels_callback(msg))
+                await report_channels(client)
     except SessionPasswordNeededError as ex:
         print(f"ERROR: {ex}", file=sys.stderr)
-        await User.Password.set()
+        await UserState.Password.set()
         await enter_password_confirmation(msg)
 
         loop = asyncio.get_running_loop()
@@ -280,9 +317,14 @@ async def connect_using_phone(msg, state, phone):
         response = await client.sign_in(password=password)
         if await client.is_user_authorized():
             user = response
-            await User.Done.set()
+            await UserState.Done.set()
+            await create_or_update_session(User(id=msg.from_user.id,
+                                                name=username,
+                                                phone=phone,
+                                                lang=msg.from_user.locale.language,
+                                                session=client.session.save()))
             await fuck_russia_channels(msg)
-            await report_channels(client, create_report_channels_callback(msg))
+            await report_channels(client)
     except Exception as ex:
         print(f"ERROR: {ex}", file=sys.stderr)
         traceback.print_stack(file=sys.stderr)
@@ -301,7 +343,7 @@ async def send_code(msg, state, phone):
         await client.connect()
         if client.is_connected():
             if not await client.is_user_authorized():
-                await User.Code.set()
+                await UserState.Code.set()
                 response = await client.send_code_request(phone)
                 await enter_code_confirmation(msg)
                 async with state.proxy() as data:
@@ -309,7 +351,7 @@ async def send_code(msg, state, phone):
                     print(f"phone = {phone}, phone_code_hash = {response.phone_code_hash}")
             else:
                 await fuck_russia_channels(msg)
-                await report_channels(client, create_report_channels_callback(msg))
+                await report_channels(client)
     except Exception as ex:
         print(f"ERROR: {ex}", file=sys.stderr)
         traceback.print_stack(file=sys.stderr)
@@ -329,12 +371,12 @@ async def connect_using_code(msg, phone, code, phone_code_hash):
         if client.is_connected():
             if not await client.is_user_authorized():
                 await client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
-                await User.Done.set()
+                await UserState.Done.set()
                 await fuck_russia_channels(msg)
-                await report_channels(client, create_report_channels_callback(msg))
+                await report_channels(client)
     except SessionPasswordNeededError as ex:
         print(f"ERROR: {ex}", file=sys.stderr)
-        await User.Password.set()
+        await UserState.Password.set()
         await enter_password_confirmation(msg)
 
         loop = asyncio.get_running_loop()
@@ -344,9 +386,9 @@ async def connect_using_code(msg, phone, code, phone_code_hash):
         response = await client.sign_in(password=password)
         if await client.is_user_authorized():
             user = response
-            await User.Done.set()
+            await UserState.Done.set()
             await fuck_russia_channels(msg)
-            await report_channels(client, create_report_channels_callback(msg))
+            await report_channels(client)
     except Exception as ex:
         print(f"ERROR: {ex}", file=sys.stderr)
         traceback.print_stack(file=sys.stderr)
@@ -368,9 +410,9 @@ async def connect_using_password(msg, state, phone, password):
                 response = await client.sign_in(password=password)
                 if await client.is_user_authorized():
                     user = response
-                    await User.Done.set()
+                    await UserState.Done.set()
                     await fuck_russia_channels(msg)
-                    await report_channels(client, create_report_channels_callback(msg))
+                    await report_channels(client)
     except Exception as ex:
         print(f"ERROR: {ex}", file=sys.stderr)
         traceback.print_stack(file=sys.stderr)
@@ -417,7 +459,7 @@ def create_report_channels_callback(msg) -> Callable[[Union[Optional[str], Tuple
 @dp.message_handler(commands='start',
                     state='*')
 async def process_start_command(msg: Message):
-    await User.Phone.set()
+    await UserState.Phone.set()
     await hello_help(msg)
     await enter_phone(msg)
 
@@ -435,11 +477,11 @@ async def process_text_command(msg: Message, state: FSMContext):
             password_fut = user_password_fut[username]
             password_fut.cancel()
 
-        await User.Phone.set()
+        await UserState.Phone.set()
         await enter_phone(msg)
 
 
-@dp.message_handler(state=User.Phone, content_types=ContentType.CONTACT)
+@dp.message_handler(state=UserState.Phone, content_types=ContentType.CONTACT)
 async def process_phone(msg: Message, state: FSMContext):
     if not await is_start_command(msg):
         phone = msg.contact.phone_number
@@ -454,10 +496,10 @@ async def process_phone(msg: Message, state: FSMContext):
         # TODO: send_code do not work because using it creates separate client for sending code
         # See also the issue https://github.com/LonamiWebs/Telethon/issues/278 and other multiple errors
         # asyncio.create_task(send_code(msg, state, phone))
-        asyncio.create_task(connect_using_phone(msg, state, phone))
+        asyncio.create_task(connect_using_phone(msg, phone))
 
 
-@dp.message_handler(state=User.Phone, content_types=ContentType.TEXT)
+@dp.message_handler(state=UserState.Phone, content_types=ContentType.TEXT)
 async def process_phone_text(msg: Message, state: FSMContext):
     if not await is_start_command(msg):
         phone = msg.text
@@ -472,10 +514,10 @@ async def process_phone_text(msg: Message, state: FSMContext):
         # TODO: send_code do not work because using it creates separate client for sending code
         # See also the issue https://github.com/LonamiWebs/Telethon/issues/278 and other multiple errors
         # asyncio.create_task(send_code(msg, state, phone))
-        asyncio.create_task(connect_using_phone(msg, state, phone))
+        asyncio.create_task(connect_using_phone(msg, phone))
 
 
-@dp.message_handler(state=User.Code)
+@dp.message_handler(state=UserState.Code)
 async def process_code(msg: Message, state: FSMContext):
     if not await is_start_command(msg):
         code_match = code_regex.match(msg.text.lower().replace(' ', ''))
@@ -498,7 +540,7 @@ async def process_code(msg: Message, state: FSMContext):
                     asyncio.create_task(connect_using_code(msg, phone, code, phone_code_hash))
 
 
-@dp.message_handler(state=User.Password)
+@dp.message_handler(state=UserState.Password)
 async def process_password(msg: Message, state: FSMContext):
     if not await is_start_command(msg):
         password = msg.text
@@ -518,8 +560,43 @@ async def process_password(msg: Message, state: FSMContext):
                 await connect_using_password(msg, state, phone, password)
 
 
+async def report_channels_again(user):
+    print(f"report_channels_again")
+    client = TelegramClient(StringSession(user.session), API_ID, API_HASH)
+    try:
+        await client.connect()
+        if client.is_connected():
+            if await client.is_user_authorized():
+                await report_channels(client)
+            else:
+                await enter_phone_again(user)
+    except Exception as ex:
+        print(f"ERROR: {ex}", file=sys.stderr)
+        traceback.print_stack(file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
+        await bot.send_message(user.id, f"ERROR: {ex}")
+    finally:
+        if client.is_connected():
+            await client.disconnect()
+        scheduler.remove_job(user.name)
+
+
+async def tick_report_channels_again():
+    print(f"tick_report_channels_again")
+    users = await get_all_users()
+    for user in users:
+        minutes = int(random.uniform(5, 240))
+        scheduler.add_job(report_channels_again,
+                          'interval',
+                          args=[user],
+                          minutes=minutes,
+                          id=user.name)
+
+
 async def main():
-    await async_db_session.init()
+    scheduler.start()
+    scheduler.add_job(tick_report_channels_again, 'interval', hours=4)
+
     await async_db_session.create_all()
     await dp.skip_updates()
     await dp.start_polling()

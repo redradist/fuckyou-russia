@@ -14,7 +14,7 @@ load_dotenv()
 
 
 async def main(args):
-    filename_creds = "../app_creds.json"
+    filename_creds = "../../app_creds.json"
     creds = {}
     if path.exists(filename_creds):
         with open(filename_creds, 'r') as f:
