@@ -83,7 +83,6 @@ class AsyncDatabaseSession:
     def __init__(self):
         self._engine = create_async_engine(
             "postgresql+asyncpg://postgres:postgres@localhost/postgres",
-            echo=True,
         )
         self._session = sessionmaker(
             self._engine,
