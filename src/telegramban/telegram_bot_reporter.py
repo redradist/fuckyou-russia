@@ -597,6 +597,8 @@ async def main():
     scheduler.start()
     scheduler.add_job(tick_report_channels_again, 'interval', hours=4)
 
+    # NOTE: For debug purposes
+    # await async_db_session.drop_all()
     await async_db_session.create_all()
     await dp.skip_updates()
     await dp.start_polling()
