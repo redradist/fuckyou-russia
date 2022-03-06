@@ -1,9 +1,11 @@
+import argparse
 import asyncio
 import os
 import re
 import sys
 import traceback
 import random
+import pandas as pd
 
 from typing import Union, Optional, Tuple, Callable, Awaitable, List
 from aiogram.dispatcher import FSMContext
@@ -18,12 +20,12 @@ from database.database import async_db_session, UserSession
 from loader import dp, bot
 from scheduler import scheduler
 from states import UserState
-from telegram_ban import report_channels
+from telegram_ban import report_channels, fuckyou_russia_channels
 from telegramban.telegram_bot_types import User
 
 import telegram_keyboard as kb
 import database.models
-
+from telegramban.google_api import download_drive_file, download_sheet_file
 
 API_ID = int(os.environ['API_ID'])
 API_HASH = os.environ['API_HASH']
@@ -567,6 +569,21 @@ async def process_password(msg: Message, state: FSMContext):
                 await connect_using_password(msg, state, phone, password)
 
 
+def download_channels_file(args):
+    try:
+        download_sheet_file(args.google_api_creds_path, args.save_sheet_path, args.sheet_filename)
+
+        channels_df = pd.read_csv(f"{args.save_sheet_path}/{args.sheet_filename}.csv")
+        channels_df = channels_df.reset_index()
+        fuckyou_russia_channels.clear()
+        for index, row in channels_df.iterrows():
+            fuckyou_russia_channels.append([row['Channel Id'], row['Channel Name']])
+    except Exception as ex:
+        print(f"ERROR: {ex}", file=sys.stderr)
+        traceback.print_stack(file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
+
+
 async def report_channels_again(user):
     print(f"report_channels_again for user = {user.name}")
     client = TelegramClient(StringSession(user.session), API_ID, API_HASH)
@@ -590,6 +607,8 @@ async def report_channels_again(user):
 
 async def tick_report_channels_again():
     print(f"tick_report_channels_again")
+    download_channels_file(args)
+
     users = await get_all_users()
     for user in users:
         minutes = int(random.uniform(5, 240))
@@ -600,7 +619,25 @@ async def tick_report_channels_again():
                           id=user.name)
 
 
-async def main():
+def parse_args():
+    parser = argparse.ArgumentParser(description='Process some integers.')
+    parser.add_argument('--google_api_creds_path',
+                        type=str,
+                        required=True,
+                        help='Path to google api credentials path')
+    parser.add_argument('--save_sheet_path',
+                        type=str,
+                        required=True,
+                        help='Save sheet path')
+    parser.add_argument('--sheet_filename',
+                        type=str,
+                        required=True,
+                        help='Sheet file name')
+
+    return parser.parse_args()
+
+
+async def main(args):
     scheduler.start()
     await tick_report_channels_again()
     scheduler.add_job(tick_report_channels_again, 'interval', hours=4)
@@ -613,4 +650,5 @@ async def main():
 
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    args = parse_args()
+    asyncio.run(main(args))
