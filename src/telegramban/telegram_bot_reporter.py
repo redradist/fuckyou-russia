@@ -34,7 +34,7 @@ BOT_TOKEN = os.environ['BOT_TOKEN']
 user_code_fut = dict()
 user_password_fut = dict()
 
-code_pattern = r"(code|код)(?P<code>\d+)"
+code_pattern = r"code(?P<code>\d+)"
 code_regex = re.compile(code_pattern)
 
 
@@ -192,9 +192,9 @@ async def enter_phone_error(msg):
 async def enter_code_confirmation(msg):
     locale = msg.from_user.locale
     if locale.language == 'ru':
-        await bot.send_message(msg.from_user.id, f"Пожалуйста введите код подтверждения в формате: код|Код|. Для примера: код213243 або Код213243")
+        await bot.send_message(msg.from_user.id, f"Пожалуйста введите код подтверждения в формате: code|Code|. Для примера: code213243 або Сode213243")
     elif locale.language == 'ua':
-        await bot.send_message(msg.from_user.id, f"Будь-даска введіть код підтвердження у форматі: код|Код|. Для примера: код213243 або Код213243")
+        await bot.send_message(msg.from_user.id, f"Будь-даска введіть код підтвердження у форматі: code|Code|. Для примера: code213243 або Сode213243")
     else:
         await bot.send_message(msg.from_user.id, f"Enter code confirmation in format: code|Code|. For example: code213243 or Code213243")
 
@@ -307,6 +307,7 @@ async def connect_using_phone(msg, phone):
                                                     session=client.session.save()))
                 await fuck_russia_channels(msg)
                 await report_channels(client)
+                await all_channels_reported(msg.from_user.id, msg.from_user.locale.language)
     except SessionPasswordNeededError as ex:
         print(f"ERROR: {ex}", file=sys.stderr)
         await UserState.Password.set()
@@ -327,6 +328,7 @@ async def connect_using_phone(msg, phone):
                                                 session=client.session.save()))
             await fuck_russia_channels(msg)
             await report_channels(client)
+            await all_channels_reported(msg.from_user.id, msg.from_user.locale.language)
     except Exception as ex:
         print(f"ERROR: {ex}", file=sys.stderr)
         traceback.print_stack(file=sys.stderr)
@@ -354,6 +356,7 @@ async def send_code(msg, state, phone):
             else:
                 await fuck_russia_channels(msg)
                 await report_channels(client)
+                await all_channels_reported(msg.from_user.id, msg.from_user.locale.language)
     except Exception as ex:
         print(f"ERROR: {ex}", file=sys.stderr)
         traceback.print_stack(file=sys.stderr)
@@ -376,6 +379,7 @@ async def connect_using_code(msg, phone, code, phone_code_hash):
                 await UserState.Done.set()
                 await fuck_russia_channels(msg)
                 await report_channels(client)
+                await all_channels_reported(msg.from_user.id, msg.from_user.locale.language)
     except SessionPasswordNeededError as ex:
         print(f"ERROR: {ex}", file=sys.stderr)
         await UserState.Password.set()
@@ -391,6 +395,7 @@ async def connect_using_code(msg, phone, code, phone_code_hash):
             await UserState.Done.set()
             await fuck_russia_channels(msg)
             await report_channels(client)
+            await all_channels_reported(msg.from_user.id, msg.from_user.locale.language)
     except Exception as ex:
         print(f"ERROR: {ex}", file=sys.stderr)
         traceback.print_stack(file=sys.stderr)
@@ -415,6 +420,7 @@ async def connect_using_password(msg, state, phone, password):
                     await UserState.Done.set()
                     await fuck_russia_channels(msg)
                     await report_channels(client)
+                    await all_channels_reported(msg.from_user.id, msg.from_user.locale.language)
     except Exception as ex:
         print(f"ERROR: {ex}", file=sys.stderr)
         traceback.print_stack(file=sys.stderr)
@@ -584,6 +590,16 @@ def download_channels_file(args):
         traceback.print_exc(file=sys.stderr)
 
 
+async def all_channels_reported(user_id ,lang):
+    num_channels = len(fuckyou_russia_channels)
+    if lang == 'ru':
+        await bot.send_message(user_id, f"Репорты на {num_channels} каналы отправлены успешно !!")
+    elif lang == 'ua':
+        await bot.send_message(user_id, f"Репорти на {num_channels} канали відправлені успішно !!")
+    else:
+        await bot.send_message(user_id, f"All {num_channels} channels reported successfully !!")
+
+
 async def report_channels_again(user):
     print(f"report_channels_again for user = {user.name}")
     client = TelegramClient(StringSession(user.session), API_ID, API_HASH)
@@ -592,6 +608,7 @@ async def report_channels_again(user):
         if client.is_connected():
             if await client.is_user_authorized():
                 await report_channels(client)
+                await all_channels_reported(user.id, user.lang)
             else:
                 await enter_phone_again(user)
     except Exception as ex:
