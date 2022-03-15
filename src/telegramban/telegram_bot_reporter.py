@@ -577,7 +577,12 @@ async def process_password(msg: Message, state: FSMContext):
 
 def download_channels_file(args):
     try:
-        download_sheet_file(args.google_api_creds_path, args.save_sheet_path, args.sheet_filename)
+        try:
+            download_sheet_file(args.google_api_creds_path, args.save_sheet_path, args.sheet_filename)
+        except Exception as ex:
+            print(f"ERROR: {ex}", file=sys.stderr)
+            traceback.print_stack(file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
 
         channels_df = pd.read_csv(f"{args.save_sheet_path}/{args.sheet_filename}.csv")
         channels_df = channels_df.reset_index()

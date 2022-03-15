@@ -81,9 +81,9 @@ def get_api_services(credentials_file_path):
         else:
             flow = InstalledAppFlow.from_client_secrets_file(credentials_file_path, SCOPES)
             creds = flow.run_local_server(port=0)
-        # Save the credentials for the next run
-        with open('token.json', 'w') as token:
-            token.write(creds.to_json())
+    # Save the credentials for the next run
+    with open('token.json', 'w') as token:
+        token.write(creds.to_json())
 
     drive = discovery.build('drive', 'v3', credentials=creds)
     sheets = discovery.build('sheets', 'v4', credentials=creds)
