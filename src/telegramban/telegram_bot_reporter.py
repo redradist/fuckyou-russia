@@ -632,6 +632,7 @@ async def tick_report_channels_again():
     download_channels_file(args)
 
     users = await get_all_users()
+    print(f"Read {len(users)} of users")
     for user in users:
         minutes = int(random.uniform(5, 240))
         scheduler.add_job(report_channels_again,
